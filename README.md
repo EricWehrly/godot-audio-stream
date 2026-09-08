@@ -153,7 +153,7 @@ rather than something only a human with speakers can check.
 
 | # | Criterion | Status |
 |---|-----------|--------|
-| 1 | 0 starvations over a 5+ minute run | see soak output |
+| 1 | 0 starvations over a 5+ minute run | ✅ PASS (330s) |
 | 2 | Extension loads in **both** 4.6 and 4.7 from one build | ✅ PASS (both) |
 | 3 | No trims after the buffer settles | ✅ PASS |
 | 4 | Consumption drift < 1% vs real-time | ✅ PASS (0.00%) |
@@ -164,16 +164,20 @@ Criteria 5 and 6 are deliberately not self-certified. A starvation counter readi
 the buffer stayed fed; it does not say the audio sounds right, and that judgement isn't
 mine to make.
 
-### Measured (45s, SomaFM Groove Salad, 128 kbps)
+### Measured (330s, SomaFM Groove Salad, 128 kbps)
 
 ```
-format           44100 Hz, 2 ch      prebuffered in 0.21s
-network          128 kbps steady     (543 kbps burst for the first ~5s)
-byte accounting  975878 recv = 971337 audio + 836 skipped + 3705 backlog
-fifo             stable at ~3.9s     consumption drift 0.00% vs real-time
+ran              330.0s              44100 Hz, 2 ch
+network          128 kbps steady     (~500 kbps burst for the first ~5s)
+byte accounting  5494115 recv = 5489476 audio + 836 skipped + 3803 backlog
+decoded          13134 mp3 frames    consumption drift 0.00% vs real-time
+fifo             4.24s - 4.47s across the whole run, no drift
 buffer trims     2 total, 0 after settling
 STARVATIONS      0
 ```
+
+`skip` stayed at 836 bytes for all 330s — i.e. the only bytes ever discarded were at
+connect. 99.92% of everything received became audio.
 
 ## Open risks
 
