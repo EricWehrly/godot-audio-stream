@@ -1,0 +1,12 @@
+config_version=5
+
+[application]
+
+config/name="godot-audio-stream POC"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.6", "Forward Plus")
+
+[display]
+
+window/size/viewport_width=900
+window/size/viewport_height=420

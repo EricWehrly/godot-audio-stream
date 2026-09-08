@@ -1,0 +1,23 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://main.gd" id="1_main"]
+
+[sub_resource type="AudioStreamGenerator" id="AudioStreamGenerator_1"]
+mix_rate = 44100.0
+buffer_length = 0.5
+
+[node name="Main" type="Node"]
+script = ExtResource("1_main")
+
+[node name="Player" type="AudioStreamPlayer" parent="."]
+stream = SubResource("AudioStreamGenerator_1")
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="Stats" type="Label" parent="UI"]
+offset_left = 24.0
+offset_top = 20.0
+offset_right = 876.0
+offset_bottom = 400.0
+theme_override_font_sizes/font_size = 16
+text = "starting..."
