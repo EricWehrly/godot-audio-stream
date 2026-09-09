@@ -97,7 +97,8 @@ statistic is a `std::atomic`. A lock-free ring buffer is possible but unjustifie
 
 - **A dropped stream is terminal** — `STATUS_ERROR` and done. → `reconnect-resilience`
 - **Polling, not signals** — callers must poll `get_status()`. → `reconnect-resilience`
-- **`http://` only** — no TLS, no redirects, no playlist files. → `phase-stations`
+- **No redirects, no playlist files** — `tls-streams` is done; `url-resolution` isn't. →
+  `phase-stations`
 - **The 5ms poll sleep is unexamined** — ~200 wakeups/second regardless of bitrate, a fixed
   cost independent of load. → `perf-harness`, hypothesis 2
 - **Windows x86_64 only.** → `platform-matrix`

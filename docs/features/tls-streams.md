@@ -2,7 +2,7 @@
 id: tls-streams
 type: feature
 epic: phase-stations
-status: in-progress
+status: done
 ---
 
 # TLS (`https://`) Streams
@@ -74,10 +74,10 @@ eu/listen/synthwaveradio.eu/radio.mp3`) that previously failed with "https is no
   (`fake-icecast-server`-backed) still passes 3/3 untouched, and the extension still loads in
   both Godot 4.6 and 4.7.
 
-## Open issue found integrating into surfer (2026-09-08) — NOT resolved
+## Resolved: the surfer integration failure (2026-09-08)
 
-TLS works reliably in **this repo's own demo** (25s + 90s soaks above) but **fails
-deterministically, 3/3, inside surfer's actual project**:
+TLS worked reliably in this repo's own demo but failed deterministically, 3/3, inside surfer's
+actual project:
 
 ```
 ERROR: SSL module failed to initialize!
@@ -85,27 +85,56 @@ ERROR: SSL module failed to initialize!
    at: connect_to_stream (modules/mbedtls/stream_peer_mbedtls.cpp:104)
 ```
 
-Isolated, not guessed at:
-- Retried 3x in surfer, deterministic every time — not contention (the demo project, tested
-  moments later on the identical machine state, succeeded immediately).
-- `HTTPRequest`-based https (Radio Browser's own search, which also goes through
-  `StreamPeerTLS` internally) **works fine** in surfer, at the same time. So TLS itself isn't
-  broken project-wide.
-- No `network/tls/*` project setting exists in either project — checked, not assumed.
+**What it actually was — narrowed by direct experiment, not guessed at:**
 
-**The one confirmed structural difference**: `HTTPRequest`'s TLS init happens on Godot's main
-thread. `RadioStream`'s happens on its own worker `std::thread` — and that's the case that
-fails, only inside surfer's larger project (more autoloads, more concurrent engine activity),
-never in the minimal demo. Leading hypothesis, **unconfirmed**: a thread-safety issue in
-Godot's own mbedtls wrapper that a quiet demo project never has enough concurrent activity to
-trigger. Not chased further this pass — would need reading Godot engine source
-(`tls_context_mbedtls.cpp`) or a minimal repro project graduated in complexity between "the
-demo" and "all of surfer" to actually localize.
+- A web search surfaced [godotengine/godot#106167](https://github.com/godotengine/godot/pull/106167)
+  ("mbedTLS: Fix concurrency issues with TLS"), a real, documented Godot engine bug about
+  mbedTLS 3's global PSA-crypto state racing across threads. Promising, but a red herring here
+  — it merged in May 2025, well before this project's 4.7, so it was already fixed in our
+  build. The web search **did** surface the actually-relevant fact: `WebFetch`ing Godot's own
+  `tls_context_mbedtls.cpp` source showed this exact error fires when
+  `CryptoMbedTLS::get_default_certificates()` returns null — a certificate-bundle-loading
+  failure, not a concurrency bug.
+- **First real experiment**: a main-thread `HTTPRequest` to any https URL, completed *before*
+  `RadioStream.open()` on an https station, fixed it completely. Looked like a
+  main-thread-vs-worker-thread story.
+- **That story turned out wrong.** Moving a warm-up handshake onto `RadioStream`'s own worker
+  thread (still a background thread, just running *before* the real connection) did **not**
+  fix it — same failure, twice over. So it wasn't really about which thread.
+- **The actual variable, isolated by moving where `open()` gets called**: a bare
+  `-s script.gd` probe calling `open()` synchronously inside `_init()` — the earliest possible
+  moment, before Godot's engine has processed a single frame — fails. The identical code,
+  deferred to the first `_process()` tick, succeeds. **This is a timing-relative-to-engine-
+  startup issue, not a threading issue.** The earlier "background thread doesn't help" result
+  was confounded: that test *also* called `open()` from `_init()`, so it never left the
+  too-early window either way.
 
-**Consequence:** the surfer-side UI change un-gating https results was reverted before
-committing — shipping "https now works" into the one place that's actually supposed to
-consume it, while it demonstrably doesn't work there, would be worse than the gate it was
-replacing. `station-tuner`'s https gate stays in place until this is root-caused.
+**The fix**: `warm_up_tls_once()` — a throwaway TLS handshake attempt, guarded by
+`std::call_once` so it runs at most once per process, called synchronously at the top of
+`open()` (before the worker thread is spawned), for any `https://` URL. It doesn't need to
+*succeed* to work: in the most hostile case tested (`open()` called from `_init()`, matching
+the original failing probes), the warm-up attempt itself **still logs the same SSL error** —
+but the real connection immediately after it succeeds anyway. The act of attempting a TLS
+handshake once is what matters, not its outcome. **Mechanism not fully understood beyond
+that** — plausibly some Godot-internal lazy state finishes initializing as a side effect of
+any attempt, success or failure, but that's inference, not confirmed from engine source.
+
+**One visible side effect worth knowing, not a bug**: on that earliest-possible-call path, the
+console still prints the scary-looking `SSL module failed to initialize!` line from the
+warm-up's own failed attempt, even on a run that ultimately works perfectly. Don't chase it as
+a regression if you see it in a log — check whether the *stream* actually played.
+
+**Verified fixed, in the worst case, not just the easy one:**
+- `open()` called synchronously in `_init()` (the original failing shape) against the real
+  station that started this investigation: warm-up fails visibly, real connection succeeds,
+  clean 30s soak — byte accounting closes (`530390 recv = 525792 audio + 836 skipped + 3762
+  backlog`), 0 starvations.
+- The real Station Tuner UI, under real timing (search round-trip, then a simulated Play
+  click several seconds into a run): clean, 100k+ frames decoded, no errors.
+- Plain `http://` behaviour and both engine versions reconfirmed unaffected after the fix.
+
+**Consequence:** surfer's `station-tuner` https gate (`Station.unsupported_reason()`) can now
+be safely removed — see that project's own history for the corresponding change.
 
 ## Not done this pass
 

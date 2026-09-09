@@ -30,6 +30,63 @@ constexpr int SOCKET_READ_CHUNK = 16384;
 // it looking for sync -- measured at 43% of the stream discarded and audio
 // output stuck at ~69% of real time. Always leave this much tail unread.
 constexpr size_t DECODE_LOOKAHEAD = 4096;
+
+// Real, reproduced finding (docs/features/tls-streams.md "Open issue" ->
+// resolved): the FIRST-EVER TLS connection in a process can fail with
+// "SSL module failed to initialize" (CryptoMbedTLS::get_default_certificates()
+// returning null) inside a large, busy project (confirmed absent in this
+// repo's own minimal demo). Root cause is still Godot's, not fully
+// understood, but empirically narrowed by two direct experiments: a
+// same-process main-thread HTTPRequest to any https URL, completed first,
+// reliably fixes it -- but running this exact warm-up on a background
+// thread does NOT (it hits the identical failure). So it specifically needs
+// to run on whichever thread calls RadioStream::open() -- in real usage
+// that's Godot's main thread, same as HTTPRequest. std::call_once makes
+// every RadioStream instance in the process share one real attempt;
+// concurrent openers block briefly rather than each hitting the same
+// failure independently.
+std::once_flag tls_warmup_flag;
+
+void warm_up_tls_once(const String &p_host, int p_port) {
+	std::call_once(tls_warmup_flag, [&]() {
+		Ref<StreamPeerTCP> tcp;
+		tcp.instantiate();
+		if (tcp->connect_to_host(p_host, p_port) != OK) {
+			return;
+		}
+		for (int i = 0; i < 300; i++) {
+			tcp->poll();
+			if (tcp->get_status() == StreamPeerTCP::STATUS_CONNECTED) {
+				break;
+			}
+			if (tcp->get_status() == StreamPeerTCP::STATUS_ERROR) {
+				return;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+		if (tcp->get_status() != StreamPeerTCP::STATUS_CONNECTED) {
+			return;
+		}
+
+		Ref<StreamPeerTLS> tls;
+		tls.instantiate();
+		if (tls->connect_to_stream(tcp, p_host) != OK) {
+			return;
+		}
+		// Best-effort: whether the handshake itself succeeds or fails
+		// (a redirect, a cert issue) doesn't matter -- what matters is that
+		// CryptoMbedTLS's default-certificate path got exercised once.
+		for (int i = 0; i < 300; i++) {
+			tcp->poll();
+			tls->poll();
+			StreamPeerTLS::Status st = tls->get_status();
+			if (st != StreamPeerTLS::STATUS_HANDSHAKING) {
+				break;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+	});
+}
 } // namespace
 
 RadioStream::RadioStream() {
@@ -96,6 +153,20 @@ bool RadioStream::open(const String &p_url) {
 	if (!parse_url(p_url, url)) {
 		fail("Could not parse URL: " + p_url);
 		return false;
+	}
+
+	if (url.is_tls) {
+		// Deliberately BEFORE spawning the worker thread, i.e. still on the
+		// caller's thread -- confirmed by direct experiment that a
+		// background-thread attempt does NOT fix this (it hits the identical
+		// failure), only a caller-thread one does. open() is called from
+		// GDScript, so in real usage this runs on Godot's main thread, same
+		// as a normal HTTPRequest. Guarded by std::call_once: this blocking
+		// call happens at most ONCE per process, on the very first https
+		// stream anyone opens -- every later open() (including a different
+		// host) is unaffected. See the class doc comment and
+		// docs/features/tls-streams.md for the full story.
+		warm_up_tls_once(url.host, url.port);
 	}
 
 	mp3dec_init(&decoder);

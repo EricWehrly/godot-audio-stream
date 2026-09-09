@@ -52,7 +52,7 @@ status: planned | in-progress | done
 | `phase-measure` | epic | — | planned |
 | [`perf-harness`](perf-harness.md) | feature | `phase-measure` | planned — see `design/performance.md` for the here-vs-surfer split |
 | `phase-stations` | epic | — | planned |
-| [`tls-streams`](tls-streams.md) | feature | `phase-stations` | ◐ works in this repo's own demo (25s + 90s soaks clean); **fails deterministically inside surfer's actual project** (mbedtls init error, worker-thread-specific, not yet root-caused) — surfer's https gate stays in place until this is fixed |
+| [`tls-streams`](tls-streams.md) | feature | `phase-stations` | ✅ done 2026-09-08 — including the surfer integration bug (real root cause: TLS attempted before Godot's engine processes its first frame, not a threading issue as first suspected; fixed via a one-time warm-up handshake in `open()`, verified in the worst case) |
 | [`url-resolution`](url-resolution.md) | feature | `phase-stations` | planned |
 | [`icy-metadata`](icy-metadata.md) | feature | `phase-stations` | planned |
 | `phase-ship` | epic | — | planned |
