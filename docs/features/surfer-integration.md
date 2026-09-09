@@ -66,7 +66,9 @@ trusts.
   ToS review. Radio Browser needs a descriptive `User-Agent`, dynamic server resolution, and
   has no uptime guarantee, so it must degrade gracefully.
   - This is surfer-side work: it's HTTP + JSON in pure GDScript, and stays a non-goal for
-    this library.
+    this library. Surfer's own feature doc: `station-tuner.md`. Its browsing/search half has
+    no dependency on this repo's C++ and can (and does) start before `reconnect-resilience`
+    lands — only real playback wiring is gated on it.
   - Worth weighing against D8's alternative: a small set of **owned or CC0 streams** carries
     none of the third-party risk and may suit the aesthetic better.
 - `icy-metadata` feeds surfer's existing Now Playing label.
