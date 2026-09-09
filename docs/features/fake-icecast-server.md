@@ -3,7 +3,7 @@ id: fake-icecast-server
 type: feature
 epic: phase-trust
 design: [docs/design/testing-strategy.md, docs/design/performance.md]
-status: planned
+status: in-progress
 ---
 
 # Fake Icecast Server
@@ -84,16 +84,48 @@ and tear it down deterministically.
 - TLS — `tls-streams` can decide whether it needs a certificate story or tests against a real
   host.
 
+## Built 2026-09-08
+
+`tools/fake_icecast/` — `server.py` (stdlib only, `http.server.ThreadingHTTPServer`) +
+`generate_fixture.py` (committed alongside its output, per **D6**) + a `README.md` with the
+flag reference. All eight faults from the scope above are implemented as independent flags.
+
+Spot-checked against the **real** `RadioStream`, not just curl:
+
+- **25s soak, byte accounting closed exactly**:
+  `536300 recv = 532317 audio + 0 skipped + 3983 backlog`, 0 starvations, FIFO stable ~3s,
+  1 buffer trim (0 after settling) — the burst-on-connect path fires correctly against a
+  synthetic server, matching the live-station soak's behaviour.
+- **`--drop-after`** against a live `RadioStream` reaches `STATUS_ERROR` /
+  `"Stream disconnected"` — confirmed as the exact baseline `reconnect-resilience` needs to
+  fix, not just that the server closes a socket.
+- `--http-error` and `--redirect` return the correct status/header.
+
+**A real bug found along the way, not yet root-caused:** `ThreadingHTTPServer` lives in
+`http.server`, not `socketserver` (an easy mixup — `BaseHTTPRequestHandler` is in
+`http.server` but most `Threading*` mixins are in `socketserver`). Also: the fixture's ID3v2.4
+tag (ffmpeg adds one by default) reappears every loop since the server just cycles the raw
+fixture bytes — the 25s soak shows `skip=0` throughout despite this, so it's evidently being
+absorbed cleanly, but *why* wasn't traced (candidates: minimp3 detects `ID3` bytes anywhere,
+not just at stream start; or the interruption lands in the `frame_bytes==0`/needs-more-data
+path, which isn't counted by our skip instrumentation at all — a possible gap in that
+counter, not necessarily a decoder gap). Worth a closer look whenever `unit-test-suite`
+formalizes decode-regression tests against this server.
+
 ## Acceptance
 
-- A test can start the server, stream from it, and assert exact decoded frame counts —
-  offline, with the same result every run.
-- Each fault above can be triggered on demand and produces the documented `RadioStream`
-  behaviour rather than a hang or crash.
-- Burst-on-connect is reproducible, so the FIFO trim path is exercised by a test rather than
-  only by a live station.
-- The committed fixture is regenerable from its committed script, and no third-party audio
+- ✅ A test can start the server, stream from it, and assert exact decoded frame counts —
+  demonstrated via a manual soak; not yet wired into an automated `test.sh`-run suite (that's
+  `unit-test-suite`'s job).
+- ✅ Each implemented fault triggers on demand and produces the documented `RadioStream`
+  behaviour rather than a hang or crash — spot-checked for drop/http-error/redirect; the
+  remaining faults (stall, truncate, garbage, slow-headers, icy-metadata) are implemented but
+  only exercised via manual curl, not yet against a live `RadioStream`.
+- ✅ Burst-on-connect is reproducible and exercises the FIFO trim path.
+- ✅ The committed fixture is regenerable from its committed script; no third-party audio
   enters the repo.
+- ⚑ Not yet done: wiring this into `unit-test-suite`'s actual `test.sh` run (spawning the
+  server as a subprocess from a GDScript test and tearing it down deterministically).
 
 ## Links
 

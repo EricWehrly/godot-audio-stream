@@ -46,7 +46,7 @@ status: planned | in-progress | done
 |----|------|--------|--------|
 | `phase-poc` | epic | — | ✅ done — `4267806`, verified on 4.6 + 4.7, 330s soak clean |
 | `phase-trust` | epic | — | planned |
-| [`fake-icecast-server`](fake-icecast-server.md) | feature | `phase-trust` | planned — **keystone**, unblocks testing *and* perf. Script-first; Docker+toxiproxy as an optional conformance tier |
+| [`fake-icecast-server`](fake-icecast-server.md) | feature | `phase-trust` | in-progress — **keystone**, server + fixture built 2026-09-08, spot-checked against real `RadioStream` (byte accounting closes, `--drop-after` reaches `STATUS_ERROR`). Not yet wired into `unit-test-suite` |
 | [`unit-test-suite`](unit-test-suite.md) | feature | `phase-trust` | planned |
 | [`reconnect-resilience`](reconnect-resilience.md) | feature | `phase-trust` | planned |
 | `phase-measure` | epic | — | planned |
