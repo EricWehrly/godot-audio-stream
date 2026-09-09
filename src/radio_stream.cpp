@@ -6,10 +6,12 @@
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
+#include <godot_cpp/variant/packed_string_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <algorithm>
 #include <chrono>
+#include <utility>
 
 using namespace godot;
 
@@ -146,6 +148,139 @@ bool RadioStream::parse_url(const String &p_url, Url &r_out) {
 	return !r_out.host.is_empty() && r_out.port > 0;
 }
 
+String RadioStream::resolve_redirect_url(const Url &p_base, const String &p_location) {
+	String location = p_location.strip_edges();
+	if (location.begins_with("http://") || location.begins_with("https://")) {
+		return location;
+	}
+
+	String scheme = p_base.is_tls ? "https:" : "http:";
+	if (location.begins_with("//")) {
+		return scheme + location; // protocol-relative: //host/path
+	}
+
+	String base_scheme = p_base.is_tls ? "https://" : "http://";
+	String authority = p_base.host;
+	bool default_port = (p_base.is_tls && p_base.port == 443) || (!p_base.is_tls && p_base.port == 80);
+	if (!default_port) {
+		authority += ":" + String::num_int64(p_base.port);
+	}
+
+	if (location.begins_with("/")) {
+		return base_scheme + authority + location; // absolute path, same host
+	}
+
+	// Relative to the current path's own directory -- rare for a redirect,
+	// but valid HTTP and cheap to support correctly.
+	String dir = p_base.path.get_base_dir();
+	if (dir.is_empty()) {
+		dir = "/";
+	} else if (!dir.ends_with("/")) {
+		dir += "/";
+	}
+	return base_scheme + authority + dir + location;
+}
+
+bool RadioStream::looks_like_playlist(const String &p_content_type, const String &p_path) {
+	String ct = p_content_type.to_lower();
+	if (ct.contains("audio/x-scpls") || ct.contains("application/pls+xml") ||
+			ct.contains("audio/x-mpegurl") || ct.contains("application/vnd.apple.mpegurl") ||
+			ct.contains("application/x-mpegurl")) {
+		return true;
+	}
+	// Servers are unreliable about Content-Type for playlists; extension is
+	// the fallback, same posture as the doc's own scope calls for.
+	String path_no_query = p_path.contains("?") ? p_path.substr(0, p_path.find("?")) : p_path;
+	String ext = path_no_query.get_extension().to_lower();
+	return ext == "pls" || ext == "m3u" || ext == "m3u8";
+}
+
+bool RadioStream::looks_like_hls(const String &p_body) {
+	// A plain m3u playlist and an HLS segment manifest share the .m3u8
+	// extension and the #EXTM3U header; these tags are HLS-specific
+	// (RFC 8216) and don't appear in an ordinary station-list playlist.
+	return p_body.contains("#EXT-X-STREAM-INF") || p_body.contains("#EXT-X-VERSION") ||
+			p_body.contains("#EXT-X-TARGETDURATION");
+}
+
+std::vector<String> RadioStream::parse_pls(const String &p_body) {
+	// PLS is INI-shaped: FileN=url lines, but nothing guarantees File1
+	// appears before File2 in the text -- only the number is authoritative,
+	// so entries are collected then sorted by index rather than trusting
+	// line order.
+	std::vector<std::pair<int, String>> entries;
+	PackedStringArray lines = p_body.split("\n");
+	for (int i = 0; i < lines.size(); i++) {
+		String line = lines[i].strip_edges();
+		int eq = line.find("=");
+		if (eq <= 0) {
+			continue;
+		}
+		String key = line.substr(0, eq);
+		if (!key.to_lower().begins_with("file")) {
+			continue;
+		}
+		String num_part = key.substr(4);
+		if (!num_part.is_valid_int()) {
+			continue;
+		}
+		String url = line.substr(eq + 1).strip_edges();
+		if (url.is_empty()) {
+			continue;
+		}
+		entries.push_back({ (int)num_part.to_int(), url });
+	}
+	std::sort(entries.begin(), entries.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+
+	std::vector<String> out;
+	out.reserve(entries.size());
+	for (const auto &e : entries) {
+		out.push_back(e.second);
+	}
+	return out;
+}
+
+std::vector<String> RadioStream::parse_m3u(const String &p_body) {
+	std::vector<String> out;
+	PackedStringArray lines = p_body.split("\n");
+	for (int i = 0; i < lines.size(); i++) {
+		String line = lines[i].strip_edges();
+		if (line.is_empty() || line.begins_with("#")) {
+			continue; // comments and #EXTINF/#EXTM3U metadata lines
+		}
+		out.push_back(line);
+	}
+	return out;
+}
+
+int RadioStream::parse_status_code(const String &p_header_text) {
+	int space1 = p_header_text.find(" ");
+	if (space1 == -1) {
+		return -1;
+	}
+	int space2 = p_header_text.find(" ", space1 + 1);
+	if (space2 == -1) {
+		return -1;
+	}
+	String code_str = p_header_text.substr(space1 + 1, space2 - space1 - 1);
+	if (!code_str.is_valid_int()) {
+		return -1;
+	}
+	return code_str.to_int();
+}
+
+String RadioStream::find_header(const String &p_header_text, const String &p_name) {
+	PackedStringArray lines = p_header_text.split("\r\n");
+	String prefix_lower = (p_name + String(":")).to_lower();
+	for (int i = 0; i < lines.size(); i++) {
+		String line_lower = lines[i].to_lower();
+		if (line_lower.begins_with(prefix_lower)) {
+			return lines[i].substr(prefix_lower.length()).strip_edges();
+		}
+	}
+	return String();
+}
+
 bool RadioStream::open(const String &p_url) {
 	close();
 
@@ -186,7 +321,11 @@ bool RadioStream::open(const String &p_url) {
 
 	status.store(STATUS_CONNECTING);
 	running.store(true);
-	worker = std::thread(&RadioStream::worker_main, this, url);
+	// The parsed Url above was only for fast-fail validation on the caller's
+	// thread. worker_main gets the raw string instead: its resolution loop
+	// (url-resolution -- redirects, playlists) parses fresh URLs as it goes,
+	// and the original string is just its first candidate.
+	worker = std::thread(&RadioStream::worker_main, this, p_url);
 	return true;
 }
 
@@ -222,114 +361,207 @@ bool RadioStream::poll_connection(Ref<StreamPeerTCP> p_tcp, Ref<StreamPeerTLS> p
 	return true;
 }
 
-void RadioStream::worker_main(Url p_url) {
-	Ref<StreamPeerTCP> tcp_peer;
-	tcp_peer.instantiate();
+void RadioStream::worker_main(String p_initial_url) {
+	// Redirects and playlist entries both collapse to "here are more URLs to
+	// try" (HandshakeOutcome::RESOLVE), so one loop and one visited/hop guard
+	// covers both -- a playlist entry that itself redirects, or a redirect to
+	// a playlist, falls out naturally instead of needing separate bookkeeping.
+	constexpr int MAX_RESOLUTION_HOPS = 10;
+	std::deque<String> candidates;
+	std::set<String> visited;
+	candidates.push_back(p_initial_url);
 
-	if (tcp_peer->connect_to_host(p_url.host, p_url.port) != OK) {
-		fail("connect_to_host failed for " + p_url.host);
-		return;
-	}
+	String last_reason = "No playable URL found";
+	int hops = 0;
 
 	while (running.load()) {
-		tcp_peer->poll();
-		StreamPeerTCP::Status st = tcp_peer->get_status();
-		if (st == StreamPeerTCP::STATUS_CONNECTED) {
-			break;
-		}
-		if (st == StreamPeerTCP::STATUS_ERROR || st == StreamPeerTCP::STATUS_NONE) {
-			fail("TCP connection failed");
+		if (candidates.empty()) {
+			fail(last_reason);
 			return;
 		}
-		std::this_thread::sleep_for(std::chrono::milliseconds(10));
-	}
-	if (!running.load()) {
-		return;
-	}
-
-	Ref<StreamPeerTLS> tls_peer;
-	Ref<StreamPeer> data_peer = tcp_peer;
-
-	if (p_url.is_tls) {
-		tls_peer.instantiate();
-		if (tls_peer->connect_to_stream(tcp_peer, p_url.host) != OK) {
-			fail("Could not start TLS handshake");
+		if (hops >= MAX_RESOLUTION_HOPS) {
+			fail("Too many redirects/playlist entries (over " + String::num_int64(MAX_RESOLUTION_HOPS) + ")");
 			return;
 		}
 
-		const int64_t handshake_deadline_ms = 10000;
-		int64_t waited = 0;
-		while (running.load()) {
-			tcp_peer->poll();
-			tls_peer->poll();
-			StreamPeerTLS::Status tst = tls_peer->get_status();
-			if (tst == StreamPeerTLS::STATUS_CONNECTED) {
-				break;
-			}
-			if (tst == StreamPeerTLS::STATUS_ERROR) {
-				fail("TLS handshake failed");
+		String next = candidates.front();
+		candidates.pop_front();
+		if (visited.count(next) != 0) {
+			// Already tried (a redirect loop, or two playlists pointing at
+			// each other) -- skip rather than fail immediately, in case
+			// other untried candidates remain. Still record a specific
+			// reason so a subsequently-empty queue reports the real cause
+			// instead of a stale message from an unrelated earlier attempt.
+			last_reason = "Redirect loop or repeated entry detected at: " + next;
+			continue;
+		}
+		visited.insert(next);
+		hops++;
+
+		Url url;
+		if (!parse_url(next, url)) {
+			last_reason = "Could not parse URL: " + next;
+			continue;
+		}
+
+		Ref<StreamPeerTCP> tcp_peer;
+		Ref<StreamPeerTLS> tls_peer;
+		Ref<StreamPeer> data_peer;
+		String connect_error;
+		if (!connect_peers(url, tcp_peer, tls_peer, data_peer, connect_error)) {
+			if (!running.load()) {
 				return;
 			}
-			if (tst == StreamPeerTLS::STATUS_ERROR_HOSTNAME_MISMATCH) {
-				// Not retryable -- the certificate genuinely doesn't match
-				// the host we asked for. reconnect-resilience (once it
-				// exists) should treat this class of error as terminal
-				// rather than retrying, same call tls-streams.md makes for a
-				// bad certificate in general.
-				fail("TLS certificate hostname mismatch for " + p_url.host);
-				return;
-			}
-			std::this_thread::sleep_for(std::chrono::milliseconds(10));
-			waited += 10;
-			if (waited > handshake_deadline_ms) {
-				fail("TLS handshake timed out");
-				return;
-			}
+			last_reason = connect_error;
+			continue;
 		}
 		if (!running.load()) {
 			return;
 		}
-		data_peer = tls_peer;
-	}
 
-	std::vector<uint8_t> input;
-	if (!http_handshake(data_peer, tcp_peer, tls_peer, p_url, input)) {
-		return;
-	}
-
-	status.store(STATUS_PLAYING);
-	decode_available(input);
-
-	while (running.load()) {
-		if (!poll_connection(tcp_peer, tls_peer)) {
-			fail("Stream disconnected");
+		HandshakeResult result = http_handshake(data_peer, tcp_peer, tls_peer, url);
+		if (!running.load()) {
 			return;
 		}
 
-		int avail = data_peer->get_available_bytes();
-		if (avail <= 0) {
-			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		if (result.outcome == HandshakeOutcome::FAIL) {
+			last_reason = result.error.is_empty() ? ("Request failed for " + next) : result.error;
 			continue;
 		}
 
-		Array result = data_peer->get_partial_data(std::min(avail, SOCKET_READ_CHUNK));
-		int64_t read_error = result[0];
-		if (read_error != (int64_t)OK) {
-			fail("Socket read error");
-			return;
-		}
-		PackedByteArray chunk = result[1];
-		if (chunk.size() == 0) {
+		if (result.outcome == HandshakeOutcome::RESOLVE) {
+			// Prepend so these are tried immediately, in the order the
+			// redirect/playlist gave them, ahead of whatever else was queued.
+			for (auto it = result.next_urls.rbegin(); it != result.next_urls.rend(); ++it) {
+				candidates.push_front(*it);
+			}
 			continue;
 		}
-		bytes_received.fetch_add(chunk.size());
-		input.insert(input.end(), chunk.ptr(), chunk.ptr() + chunk.size());
+
+		// SUCCESS -- resolution is over, this is the audio. Steady-state read
+		// loop below only ever exits via return (disconnect/error/close).
+		status.store(STATUS_PLAYING);
+		std::vector<uint8_t> input = result.leftover;
 		decode_available(input);
+
+		while (running.load()) {
+			if (!poll_connection(tcp_peer, tls_peer)) {
+				fail("Stream disconnected");
+				return;
+			}
+
+			int avail = data_peer->get_available_bytes();
+			if (avail <= 0) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(5));
+				continue;
+			}
+
+			Array read_result = data_peer->get_partial_data(std::min(avail, SOCKET_READ_CHUNK));
+			int64_t read_error = read_result[0];
+			if (read_error != (int64_t)OK) {
+				fail("Socket read error");
+				return;
+			}
+			PackedByteArray chunk = read_result[1];
+			if (chunk.size() == 0) {
+				continue;
+			}
+			bytes_received.fetch_add(chunk.size());
+			input.insert(input.end(), chunk.ptr(), chunk.ptr() + chunk.size());
+			decode_available(input);
+		}
+		return;
 	}
 }
 
-bool RadioStream::http_handshake(Ref<StreamPeer> p_data_peer, Ref<StreamPeerTCP> p_tcp,
-		Ref<StreamPeerTLS> p_tls, const Url &p_url, std::vector<uint8_t> &r_leftover) {
+bool RadioStream::connect_peers(const Url &p_url, Ref<StreamPeerTCP> &r_tcp, Ref<StreamPeerTLS> &r_tls,
+		Ref<StreamPeer> &r_data, String &r_error) {
+	r_tcp.instantiate();
+	if (r_tcp->connect_to_host(p_url.host, p_url.port) != OK) {
+		r_error = "connect_to_host failed for " + p_url.host;
+		return false;
+	}
+
+	// A dead port doesn't reliably reach STATUS_ERROR quickly on its own --
+	// measured directly (url-resolution testing): a refused localhost
+	// connection can sit in a non-terminal state well past any reasonable
+	// wait. This deadline is what the original single-URL open() never
+	// needed (a human supplies one real URL and waits), but a playlist
+	// fallback trying several candidates absolutely does.
+	const int64_t connect_deadline_ms = 8000;
+	int64_t connect_waited = 0;
+	while (running.load()) {
+		r_tcp->poll();
+		StreamPeerTCP::Status st = r_tcp->get_status();
+		if (st == StreamPeerTCP::STATUS_CONNECTED) {
+			break;
+		}
+		if (st == StreamPeerTCP::STATUS_ERROR || st == StreamPeerTCP::STATUS_NONE) {
+			r_error = "TCP connection failed for " + p_url.host;
+			return false;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		connect_waited += 10;
+		if (connect_waited > connect_deadline_ms) {
+			r_error = "TCP connect timed out for " + p_url.host;
+			return false;
+		}
+	}
+	if (!running.load()) {
+		return false;
+	}
+
+	r_data = r_tcp;
+	if (!p_url.is_tls) {
+		return true;
+	}
+
+	r_tls.instantiate();
+	if (r_tls->connect_to_stream(r_tcp, p_url.host) != OK) {
+		r_error = "Could not start TLS handshake for " + p_url.host;
+		return false;
+	}
+
+	const int64_t handshake_deadline_ms = 10000;
+	int64_t waited = 0;
+	while (running.load()) {
+		r_tcp->poll();
+		r_tls->poll();
+		StreamPeerTLS::Status tst = r_tls->get_status();
+		if (tst == StreamPeerTLS::STATUS_CONNECTED) {
+			break;
+		}
+		if (tst == StreamPeerTLS::STATUS_ERROR) {
+			r_error = "TLS handshake failed for " + p_url.host;
+			return false;
+		}
+		if (tst == StreamPeerTLS::STATUS_ERROR_HOSTNAME_MISMATCH) {
+			// Not retryable against THIS host -- but in a multi-candidate
+			// resolution (a playlist with several mirrors) a different entry
+			// may still be fine, so this is only a per-candidate failure, not
+			// an immediate abort of the whole resolution.
+			r_error = "TLS certificate hostname mismatch for " + p_url.host;
+			return false;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		waited += 10;
+		if (waited > handshake_deadline_ms) {
+			r_error = "TLS handshake timed out for " + p_url.host;
+			return false;
+		}
+	}
+	if (!running.load()) {
+		return false;
+	}
+	r_data = r_tls;
+	return true;
+}
+
+RadioStream::HandshakeResult RadioStream::http_handshake(Ref<StreamPeer> p_data_peer, Ref<StreamPeerTCP> p_tcp,
+		Ref<StreamPeerTLS> p_tls, const Url &p_url) {
+	HandshakeResult result;
+	result.outcome = HandshakeOutcome::FAIL;
+
 	// Deliberately no "Icy-MetaData: 1" -- requesting metadata makes Icecast
 	// interleave title blocks into the audio every icy-metaint bytes, which
 	// corrupts MP3 framing unless de-interleaved. Titles are a follow-up.
@@ -338,66 +570,138 @@ bool RadioStream::http_handshake(Ref<StreamPeer> p_data_peer, Ref<StreamPeerTCP>
 			"User-Agent: godot-audio-stream-poc/0.1\r\n" +
 			"Accept: */*\r\n" +
 			"Connection: close\r\n\r\n";
-
-	PackedByteArray request_bytes = request.to_utf8_buffer();
-	if (p_data_peer->put_data(request_bytes) != OK) {
-		fail("Failed to send HTTP request");
-		return false;
+	if (p_data_peer->put_data(request.to_utf8_buffer()) != OK) {
+		return result;
 	}
 
-	std::vector<uint8_t> header;
+	// Phase 1: read until the CRLFCRLF that ends the response headers.
+	std::vector<uint8_t> buffer;
+	size_t header_end = 0;
 	const int64_t deadline_ms = 10000;
 	int64_t waited = 0;
-
-	while (running.load()) {
+	while (running.load() && header_end == 0) {
 		if (!poll_connection(p_tcp, p_tls)) {
-			fail("Connection dropped during handshake");
-			return false;
+			return result;
 		}
 		int avail = p_data_peer->get_available_bytes();
 		if (avail <= 0) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 			waited += 10;
 			if (waited > deadline_ms) {
-				fail("Timed out waiting for HTTP response headers");
-				return false;
+				return result;
 			}
 			continue;
 		}
-
-		Array result = p_data_peer->get_partial_data(std::min(avail, SOCKET_READ_CHUNK));
-		int64_t read_error = result[0];
-		if (read_error != (int64_t)OK) {
-			fail("Socket read error during handshake");
-			return false;
+		Array read = p_data_peer->get_partial_data(std::min(avail, SOCKET_READ_CHUNK));
+		if ((int64_t)read[0] != (int64_t)OK) {
+			return result;
 		}
-		PackedByteArray chunk = result[1];
-		header.insert(header.end(), chunk.ptr(), chunk.ptr() + chunk.size());
+		PackedByteArray chunk = read[1];
+		buffer.insert(buffer.end(), chunk.ptr(), chunk.ptr() + chunk.size());
 
-		// Look for the CRLFCRLF that ends the response header block.
-		for (size_t i = 3; i < header.size(); i++) {
-			if (header[i - 3] == '\r' && header[i - 2] == '\n' &&
-					header[i - 1] == '\r' && header[i] == '\n') {
-				String status_line;
-				for (size_t j = 0; j < i && header[j] != '\r'; j++) {
-					status_line += String::chr(header[j]);
-				}
-				if (!status_line.contains("200")) {
-					fail("Server rejected the request: " + status_line);
-					return false;
-				}
-				r_leftover.assign(header.begin() + i + 1, header.end());
-				bytes_received.fetch_add((int64_t)r_leftover.size());
-				return true;
+		for (size_t i = 3; i < buffer.size(); i++) {
+			if (buffer[i - 3] == '\r' && buffer[i - 2] == '\n' && buffer[i - 1] == '\r' && buffer[i] == '\n') {
+				header_end = i + 1;
+				break;
 			}
 		}
-
-		if (header.size() > 65536) {
-			fail("HTTP response header exceeded 64 KiB");
-			return false;
+		if (header_end == 0 && buffer.size() > 65536) {
+			return result;
 		}
 	}
-	return false;
+	if (!running.load() || header_end == 0) {
+		return result;
+	}
+
+	// Phase 2: interpret status + the headers we care about.
+	String header_text;
+	for (size_t j = 0; j < header_end; j++) {
+		header_text += String::chr(buffer[j]);
+	}
+	int status_code = parse_status_code(header_text);
+	String location = find_header(header_text, "Location");
+	String content_type = find_header(header_text, "Content-Type");
+
+	if (status_code == 301 || status_code == 302 || status_code == 303 ||
+			status_code == 307 || status_code == 308) {
+		if (location.is_empty()) {
+			result.error = String::num_int64(status_code) + " redirect with no Location header";
+			return result;
+		}
+		result.outcome = HandshakeOutcome::RESOLVE;
+		result.next_urls.push_back(resolve_redirect_url(p_url, location));
+		return result;
+	}
+
+	if (status_code != 200) {
+		result.error = "Server returned status " + String::num_int64(status_code);
+		return result;
+	}
+
+	if (!looks_like_playlist(content_type, p_url.path)) {
+		result.outcome = HandshakeOutcome::SUCCESS;
+		result.leftover.assign(buffer.begin() + header_end, buffer.end());
+		bytes_received.fetch_add((int64_t)result.leftover.size());
+		return result;
+	}
+
+	// Phase 3 (playlist only): keep reading a bounded body. The server
+	// closing the connection here is expected (we asked for Connection:
+	// close after fully sending a small text file) and is success, not the
+	// error it would be for an audio stream disconnecting mid-stream.
+	std::vector<uint8_t> body(buffer.begin() + header_end, buffer.end());
+	const size_t MAX_PLAYLIST_BYTES = 65536;
+	int64_t body_waited = 0;
+	while (running.load() && body.size() < MAX_PLAYLIST_BYTES) {
+		if (!poll_connection(p_tcp, p_tls)) {
+			break;
+		}
+		int avail = p_data_peer->get_available_bytes();
+		if (avail <= 0) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			body_waited += 10;
+			if (body_waited > deadline_ms) {
+				break;
+			}
+			continue;
+		}
+		Array read = p_data_peer->get_partial_data(std::min(avail, SOCKET_READ_CHUNK));
+		if ((int64_t)read[0] != (int64_t)OK) {
+			break;
+		}
+		PackedByteArray chunk = read[1];
+		body.insert(body.end(), chunk.ptr(), chunk.ptr() + chunk.size());
+	}
+	if (!running.load()) {
+		return result;
+	}
+
+	String body_text;
+	for (uint8_t b : body) {
+		body_text += String::chr(b);
+	}
+
+	// Regardless of extension/content-type -- if the body itself carries HLS
+	// markers, reject it (D5). A mislabeled .m3u3 could otherwise slip past
+	// an extension-only check.
+	if (looks_like_hls(body_text)) {
+		result.error = "HLS (segment-manifest) streams are not supported";
+		return result;
+	}
+
+	String path_no_query = p_url.path.contains("?") ? p_url.path.substr(0, p_url.path.find("?")) : p_url.path;
+	String ext = path_no_query.get_extension().to_lower();
+	String ct_lower = content_type.to_lower();
+	bool is_pls = ext == "pls" || ct_lower.contains("scpls") || ct_lower.contains("pls+xml");
+
+	std::vector<String> entries = is_pls ? parse_pls(body_text) : parse_m3u(body_text);
+	if (entries.empty()) {
+		result.error = "Playlist had no usable entries";
+		return result;
+	}
+	result.outcome = HandshakeOutcome::RESOLVE;
+	result.next_urls = entries;
+	return result;
 }
 
 void RadioStream::decode_available(std::vector<uint8_t> &r_input) {

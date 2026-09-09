@@ -53,7 +53,7 @@ status: planned | in-progress | done
 | [`perf-harness`](perf-harness.md) | feature | `phase-measure` | planned — see `design/performance.md` for the here-vs-surfer split |
 | `phase-stations` | epic | — | planned |
 | [`tls-streams`](tls-streams.md) | feature | `phase-stations` | ✅ done 2026-09-08 — including the surfer integration bug (real root cause: TLS attempted before Godot's engine processes its first frame, not a threading issue as first suspected; fixed via a one-time warm-up handshake in `open()`, verified in the worst case) |
-| [`url-resolution`](url-resolution.md) | feature | `phase-stations` | planned |
+| [`url-resolution`](url-resolution.md) | feature | `phase-stations` | ✅ done 2026-09-08 — redirects + `.pls`/`.m3u` playlists + HLS rejection, 6/6 real end-to-end scenarios against live servers, one unified resolution loop for both redirects and playlists |
 | [`icy-metadata`](icy-metadata.md) | feature | `phase-stations` | planned |
 | `phase-ship` | epic | — | planned |
 | [`surfer-integration`](surfer-integration.md) | feature | `phase-ship` | planned — consumption settled (D7): surfer vendors the built artifact |

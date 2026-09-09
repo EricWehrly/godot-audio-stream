@@ -74,6 +74,8 @@ class Config:
         self.redirect = args.redirect
         self.slow_headers = args.slow_headers
         self.icy_metadata = args.icy_metadata
+        self.playlist_format = args.playlist_format
+        self.playlist_entries = args.playlist_entries.split(",") if args.playlist_entries else []
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -100,6 +102,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             return
 
+        if cfg.playlist_format:
+            self._serve_playlist()
+            return
+
         if cfg.slow_headers:
             self._send_headers_byte_by_byte()
         else:
@@ -109,6 +115,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._stream_body()
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass  # client (or our own --drop-after) closed -- not a test failure
+
+    def _serve_playlist(self) -> None:
+        fmt = self.config.playlist_format
+        entries = self.config.playlist_entries
+        if fmt == "pls":
+            content_type = "audio/x-scpls"
+            lines = ["[playlist]"]
+            for i, url in enumerate(entries, start=1):
+                lines.append("File%d=%s" % (i, url))
+            lines.append("NumberOfEntries=%d" % len(entries))
+            body = ("\r\n".join(lines) + "\r\n").encode("utf-8")
+        else:  # m3u / m3u8 -- same line-based shape, extension picked via URL
+            content_type = "audio/x-mpegurl" if fmt == "m3u" else "application/vnd.apple.mpegurl"
+            lines = ["#EXTM3U"] + list(entries)
+            body = ("\r\n".join(lines) + "\r\n").encode("utf-8")
+
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_headers_normal(self) -> None:
         self.send_response(200)
@@ -224,6 +252,10 @@ def build_config() -> Config:
                     help="Trickle response headers one byte per 50ms.")
     p.add_argument("--icy-metadata", action="store_true",
                     help="Honor Icy-MetaData:1 requests with interleaved titles.")
+    p.add_argument("--playlist-format", choices=["pls", "m3u", "m3u8"], default=None,
+                    help="Serve a playlist body (see --playlist-entries) instead of streaming.")
+    p.add_argument("--playlist-entries", type=str, default="",
+                    help="Comma-separated URLs for --playlist-format's body, in order.")
     return Config(p.parse_args())
 
 

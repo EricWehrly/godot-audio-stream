@@ -35,6 +35,7 @@ Every fault is an independent flag; combine as needed:
 | `--slow-headers` | Trickles response headers one byte per 50ms — exercises the handshake timeout. |
 | `--icy-metadata` | Honors `Icy-MetaData: 1` with interleaved `StreamTitle=` blocks. |
 | `--bitrate-kbps N` / `--burst-kbps N` / `--burst-seconds N` | Controls steady-state and burst-on-connect rate — reproduces the documented Icecast burst behaviour on demand. |
+| `--playlist-format {pls,m3u,m3u8}` + `--playlist-entries URL1,URL2,...` | Serves a playlist body instead of streaming — added for `url-resolution` testing. |
 
 ## Verified against real `RadioStream`
 

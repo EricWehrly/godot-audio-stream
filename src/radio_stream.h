@@ -19,7 +19,9 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <mutex>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -78,17 +80,58 @@ private:
 		bool is_tls = false;
 	};
 
-	static bool parse_url(const godot::String &p_url, Url &r_out);
+	// What a single connect+GET attempt discovered. RESOLVE means "the real
+	// answer isn't audio, here are one or more URLs to try instead" -- both a
+	// redirect's single Location and a playlist's list of entries collapse to
+	// this same shape, so worker_main's resolution loop doesn't need to know
+	// which produced it.
+	enum class HandshakeOutcome { SUCCESS, RESOLVE, FAIL };
+	struct HandshakeResult {
+		HandshakeOutcome outcome = HandshakeOutcome::FAIL;
+		std::vector<godot::String> next_urls; // RESOLVE only, tried in order
+		std::vector<uint8_t> leftover; // SUCCESS only: audio bytes already read
+		godot::String error; // FAIL only, when a specific reason is worth surfacing (e.g. HLS)
+	};
 
-	void worker_main(Url p_url);
+	static bool parse_url(const godot::String &p_url, Url &r_out);
+	// Combines a redirect's (possibly relative, possibly protocol-relative)
+	// Location value with the URL that produced it into a new absolute URL.
+	static godot::String resolve_redirect_url(const Url &p_base, const godot::String &p_location);
+
+	// True if `p_content_type` or (as a fallback -- servers are unreliable
+	// about the header) `p_path`'s extension marks this a playlist rather
+	// than audio.
+	static bool looks_like_playlist(const godot::String &p_content_type, const godot::String &p_path);
+	// `#EXT-X-STREAM-INF`/`#EXT-X-VERSION` mark an HLS segment manifest, which
+	// a .m3u8 file may or may not actually be (D5: out of scope, detect and
+	// reject rather than mis-stream it as a flat entry list).
+	static bool looks_like_hls(const godot::String &p_body);
+	static std::vector<godot::String> parse_pls(const godot::String &p_body);
+	static std::vector<godot::String> parse_m3u(const godot::String &p_body);
+	// header_text is the raw block up to and including the terminating
+	// CRLFCRLF, "HTTP/1.x NNN reason\r\nName: value\r\n...". -1 if unparseable.
+	static int parse_status_code(const godot::String &p_header_text);
+	// Case-insensitive; "" if absent. Any single header, not just Location --
+	// used for both Location and Content-Type.
+	static godot::String find_header(const godot::String &p_header_text, const godot::String &p_name);
+
+	void worker_main(godot::String p_initial_url);
 	// Polls whichever layer(s) are active and reports whether the connection
 	// is still up. TLS wraps TCP, so both need polling every tick: TCP pumps
 	// the raw socket, TLS pumps its own handshake/record layer on top of it.
 	// p_tls may be null (plain http), in which case only the TCP status
 	// matters.
 	static bool poll_connection(godot::Ref<godot::StreamPeerTCP> p_tcp, godot::Ref<godot::StreamPeerTLS> p_tls);
-	bool http_handshake(godot::Ref<godot::StreamPeer> p_data_peer, godot::Ref<godot::StreamPeerTCP> p_tcp,
-			godot::Ref<godot::StreamPeerTLS> p_tls, const Url &p_url, std::vector<uint8_t> &r_leftover);
+	// One connect (TCP, +TLS if p_url.is_tls) attempt. false means this
+	// candidate is dead -- NOT reported via fail() here; the resolution loop
+	// in worker_main decides whether that's fatal (no candidates left) or
+	// just means "try the next one". r_error is a human-readable reason,
+	// kept for the case there's only ever been one candidate.
+	bool connect_peers(const Url &p_url, godot::Ref<godot::StreamPeerTCP> &r_tcp,
+			godot::Ref<godot::StreamPeerTLS> &r_tls, godot::Ref<godot::StreamPeer> &r_data,
+			godot::String &r_error);
+	HandshakeResult http_handshake(godot::Ref<godot::StreamPeer> p_data_peer, godot::Ref<godot::StreamPeerTCP> p_tcp,
+			godot::Ref<godot::StreamPeerTLS> p_tls, const Url &p_url);
 	void decode_available(std::vector<uint8_t> &r_input);
 	void fail(const godot::String &p_message);
 
