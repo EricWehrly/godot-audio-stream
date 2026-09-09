@@ -3,10 +3,13 @@ extends Node
 ## POC harness: drives RadioStream (C++ decode) into AudioStreamGenerator (GDScript audio).
 ## The number that matters is `underruns` -- it must stay 0 across a long run.
 
-## Any Icecast/Shoutcast endpoint serving raw MP3 over plain http.
-## NOTE: using a third party's stream in a shipped game is a ToS/licensing
-## question separate from whether this works technically.
-@export var stream_url: String = "http://ice1.somafm.com/groovesalad-128-mp3"
+## An Icecast/Shoutcast endpoint serving raw MP3 over plain http.
+##
+## Deliberately EMPTY by default (D8). No station URL ships with this repo:
+## a station's terms may forbid third-party applications from using its streams
+## regardless of commercial intent, and shipping a default is exactly the thing
+## that gets objected to. Supply your own here or in the Inspector.
+@export var stream_url: String = ""
 
 ## Seconds of decoded audio to bank before starting playback.
 @export var prebuffer_seconds: float = 1.0
@@ -23,6 +26,11 @@ var elapsed := 0.0
 
 
 func _ready() -> void:
+	if stream_url.is_empty():
+		stats.text = "Set `stream_url` on the Main node to an http:// MP3 stream endpoint.\n\nNo station ships with this repo -- see docs/design/decisions.md (D8)."
+		set_process(false)
+		return
+
 	radio = RadioStream.new()
 	if not radio.open(stream_url):
 		push_error("RadioStream.open failed: %s" % radio.get_last_error())

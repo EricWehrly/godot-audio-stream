@@ -46,7 +46,7 @@ status: planned | in-progress | done
 |----|------|--------|--------|
 | `phase-poc` | epic | — | ✅ done — `4267806`, verified on 4.6 + 4.7, 330s soak clean |
 | `phase-trust` | epic | — | planned |
-| [`fake-icecast-server`](fake-icecast-server.md) | feature | `phase-trust` | planned — **keystone**, unblocks testing *and* perf |
+| [`fake-icecast-server`](fake-icecast-server.md) | feature | `phase-trust` | planned — **keystone**, unblocks testing *and* perf. Script-first; Docker+toxiproxy as an optional conformance tier |
 | [`unit-test-suite`](unit-test-suite.md) | feature | `phase-trust` | planned |
 | [`reconnect-resilience`](reconnect-resilience.md) | feature | `phase-trust` | planned |
 | `phase-measure` | epic | — | planned |
@@ -56,10 +56,10 @@ status: planned | in-progress | done
 | [`url-resolution`](url-resolution.md) | feature | `phase-stations` | planned |
 | [`icy-metadata`](icy-metadata.md) | feature | `phase-stations` | planned |
 | `phase-ship` | epic | — | planned |
-| [`surfer-integration`](surfer-integration.md) | feature | `phase-ship` | planned |
-| [`platform-matrix`](platform-matrix.md) | feature | `phase-ship` | planned |
+| [`surfer-integration`](surfer-integration.md) | feature | `phase-ship` | planned — consumption settled (D7): surfer vendors the built artifact |
+| [`platform-matrix`](platform-matrix.md) | feature | `phase-ship` | planned — de-scoped to one documented build command (D7); CI/platforms deferred until triggered |
 | [`stream-gain-normalization`](stream-gain-normalization.md) | feature | `phase-ship` | planned |
 | `phase-reach` | epic | — | planned |
 | [`opus-codec`](opus-codec.md) | feature | `phase-reach` | planned |
-| [`web-audio-fallback`](web-audio-fallback.md) | feature | `phase-reach` | planned — D3 |
+| [`web-audio-fallback`](web-audio-fallback.md) | feature | `phase-reach` | planned — D3. Spectrum analysis IS recoverable via Web Audio (earlier claim corrected); prior art exists in the retired Three.js build |
 | [`audiostreamplayback-migration`](audiostreamplayback-migration.md) | feature | `phase-reach` | ⏸ contingency only (D2) — do not start without a measured trigger |

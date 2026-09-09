@@ -15,23 +15,23 @@ in-game performance verdict that no isolated harness can give.
 
 ## Two halves
 
-### 1. Consumption (Q2 — unresolved)
+### 1. Consumption — settled (D7)
 
-Surfer's addon taxonomy offers two patterns, and **neither cleanly fits a binary artifact**:
+Surfer's two existing addon patterns both fit awkwardly: a `lib/` submodule + symlink leaves
+nowhere sensible for a built `.dll` (symlinked dirs are gitignored), and vendoring the folder
+directly means rebuilding a binary inside surfer on every change.
 
-| Pattern | Fit | Problem |
-|---|---|---|
-| Submodule in `lib/` + `link-addons.sh` symlink | For repos under active iteration — that's us | Symlinked dirs are gitignored, so where does the built `.dll` live and who builds it? |
-| Vendor the `addons/<name>/` folder directly | How third-party addons are installed | Means committing a binary into surfer and rebuilding it there on every change |
+**Resolved: the built artifact is the deliverable.** This repo supports a documented
+one-command build (`platform-matrix`); surfer references the repo by link and vendors the
+output like any other third-party addon.
 
-Neither is obviously right. A third option: treat the **built artifact** as the deliverable —
-CI (`platform-matrix`) publishes per-platform binaries to a GitHub release, and surfer vendors
-a specific released version like any other third-party addon. That decouples surfer from this
-repo's build toolchain entirely, which matters because surfer's `verify.sh`/`test.sh` have no
-C++ in them today and shouldn't grow any.
+The property that matters: **surfer's pipeline never needs SCons or MSVC.** Its
+`verify.sh`/`test.sh` have no C++ in them today and shouldn't grow any.
 
-**Recommendation to confirm when the time comes:** the release-artifact route, precisely
-because it keeps SCons and MSVC out of surfer's pipeline.
+This is the conventional GDExtension lifecycle with the automation deferred — normally CI
+builds per-platform on tag and publishes an `addons/<name>/` archive to a release, which is
+where this ends up if it's ever worth automating. Until then, a build command and a link is
+genuinely enough.
 
 ### 2. The performance verdict
 
@@ -59,8 +59,16 @@ trusts.
 - Wire `RadioStream` as a source in `LocalTrackPlayer`/`MusicLibrary` alongside the existing
   local sources, so radio appears in the existing music browser rather than as a parallel
   system.
-- Station URLs as user-supplied config, not hardcoded (see Q3 — the licensing question is
-  about *shipping* a station list, and user-supplied URLs sidestep it).
+- **Station selection (D8):** a directory browser backed by
+  [Radio Browser](https://api.radio-browser.info/) (~58k stations, no API key, explicitly
+  permits use in non-free software) plus a user-URL field. **Ship no curated station list** —
+  that's the one option with real downside, and it inherits both maintenance and per-station
+  ToS review. Radio Browser needs a descriptive `User-Agent`, dynamic server resolution, and
+  has no uptime guarantee, so it must degrade gracefully.
+  - This is surfer-side work: it's HTTP + JSON in pure GDScript, and stays a non-goal for
+    this library.
+  - Worth weighing against D8's alternative: a small set of **owned or CC0 streams** carries
+    none of the third-party risk and may suit the aesthetic better.
 - `icy-metadata` feeds surfer's existing Now Playing label.
 - Graceful absence: no network, or a dead station, must degrade exactly as gracefully as
   surfer's local-music path already does with no tracks present — that posture is established

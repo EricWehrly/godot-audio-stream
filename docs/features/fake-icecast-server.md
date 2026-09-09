@@ -19,9 +19,11 @@ question entirely (Q1) by generating its own audio.
 
 ## Scope
 
-- **Synthetic MP3 generation.** Encode a known signal (tone, sweep, or silence) to MP3 frames
-  at a chosen bitrate/sample rate. Generated from source, never committed as an audio file —
-  so the bytes are reproducible and nothing copyrighted goes near the repo. Resolves Q1.
+- **Synthetic MP3 fixture** (**D6**). A short oscillator piece — deliberately a real signal
+  rather than silence, since silence decodes fine while hiding exactly the corruption we care
+  about — rendered to MP3 via ffmpeg/libmp3lame. Both the generator script and its `.mp3`
+  output are committed: reproducible *and* no encoder needed at test time. Content is ours,
+  so redistribution is unencumbered.
 - **A controlled feed.** Serve at an exact byte rate, so a test can assert real-time behaviour
   without network variance. Configurable burst-on-connect to reproduce the real Icecast
   behaviour the FIFO trim logic exists to handle.
@@ -36,15 +38,44 @@ question entirely (Q1) by generating its own audio.
   - **optional ICY metadata interleaving**, so `icy-metadata` can be built and tested
     without needing a real station that happens to send titles
 
-## Implementation notes
+## Implementation: script vs. Docker
 
-Language is open. A small Python script is the least-friction option (Python is already a
-build dependency via SCons) and keeps the server out of the Godot process entirely, which
-makes "kill the server mid-test" trivial. A GDScript `TCPServer` alternative would keep
-everything in-engine but makes hard-kill faults awkward.
+Docker was proposed for simplicity. Worth examining, because **real Icecast in Docker is
+probably not the simpler option here** — for a reason that isn't obvious until you try it:
 
-Whichever is chosen, tests must be able to start it, point `RadioStream` at
-`http://127.0.0.1:<port>/...`, and tear it down deterministically.
+> **Icecast doesn't generate audio.** It's a *relay*. To serve a stream you also need a source
+> client (`ices2`, `ezstream`, `liquidsoap`, …) plus audio to feed it. "Icecast in Docker" is
+> really three moving parts and a compose file, not one container.
+
+And the thing we most need — fault injection — is what real Icecast is *worst* at. There's no
+way to tell it "stall this client now" or "drop this connection after 10 seconds". Killing the
+container is crude, slow, and can only produce one of the faults on our list.
+
+**Recommendation — a small script as the primary tool:**
+
+- Python, no dependencies (already a build dependency via SCons), running outside the Godot
+  process so hard-kill faults are trivial.
+- Every fault above becomes a flag: `--drop-after 10s`, `--stall-at 30s`, `--burst 512k`.
+- Starts in milliseconds; tests can spin one per case.
+- MP3 bytes generated with **ffmpeg** (`libmp3lame`), confirmed present on this machine — see
+  Q1's resolution for what gets committed.
+
+**Docker is still worth having, as an optional conformance tier.** If we want offline
+verification against the genuine article, the compose file is `icecast` + a source client +
+[**toxiproxy**](https://github.com/Shopify/toxiproxy) (MIT) in front. Toxiproxy is the right
+tool for the fault half — latency, bandwidth throttling, connection drops, slow-close, all
+controllable over an API at the TCP layer, which is exactly our fault list and is
+*better*-controlled than a script could manage at that level.
+
+But note the marginal value is smaller than it looks: **we already get real-Icecast fidelity
+for free** from the network-tagged tests against a live station. Docker's genuine additions
+are offline-ness and reproducible TCP-level faults.
+
+Docker is confirmed available on this machine, so this stays cheap to add later. Start with
+the script; add the compose tier if the script's fidelity proves insufficient.
+
+Whichever is used, tests must start it, point `RadioStream` at `http://127.0.0.1:<port>/...`,
+and tear it down deterministically.
 
 ## Non-goals
 
@@ -61,7 +92,8 @@ Whichever is chosen, tests must be able to start it, point `RadioStream` at
   behaviour rather than a hang or crash.
 - Burst-on-connect is reproducible, so the FIFO trim path is exercised by a test rather than
   only by a live station.
-- No audio file is committed to the repo.
+- The committed fixture is regenerable from its committed script, and no third-party audio
+  enters the repo.
 
 ## Links
 

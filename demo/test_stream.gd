@@ -7,7 +7,9 @@ extends SceneTree
 ##
 ## Run: <godot> --headless --path demo -s test_stream.gd
 
-const URL := "http://ice1.somafm.com/groovesalad-128-mp3"
+## No default station (D8) -- pass one explicitly:
+##   <godot> --headless --path demo -s test_stream.gd ++ --url=http://host/mount
+## Once `fake-icecast-server` exists it becomes the default and this goes offline.
 const RUN_SECONDS := 45.0
 const PREBUFFER_SECONDS := 1.0
 const CONNECT_TIMEOUT := 20.0
@@ -28,6 +30,7 @@ var last_bytes := 0
 var frame_debt := 0.0
 var steady_trims := -1
 var run_seconds := RUN_SECONDS
+var url := ""
 
 
 func _init() -> void:
@@ -36,15 +39,27 @@ func _init() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--seconds="):
 			run_seconds = float(arg.split("=")[1])
+		elif arg.begins_with("--url="):
+			url = arg.substr(len("--url="))
+
+	if url.is_empty():
+		print("RESULT  FAIL (no --url= given; no station ships with this repo, see D8)")
+		quit(2)
+		return
 
 	radio = RadioStream.new()
-	print("connecting to %s for %.0fs" % [URL, run_seconds])
-	if not radio.open(URL):
+	print("connecting to %s for %.0fs" % [url, run_seconds])
+	if not radio.open(url):
 		print("RESULT  FAIL (open rejected the URL: %s)" % radio.get_last_error())
 		quit(1)
 
 
 func _process(delta: float) -> bool:
+	# quit() only schedules the exit -- _process still runs once more, so a
+	# refused startup would dereference a null radio here.
+	if radio == null:
+		return true
+
 	elapsed += delta
 	var rate := radio.get_sample_rate()
 

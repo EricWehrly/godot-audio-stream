@@ -56,14 +56,24 @@ most of tier 1 from impossible to routine. It buys:
   measurement (see `design/performance.md`).
 - **No licensing question** — synthetic audio, nothing copyrighted anywhere near the repo.
 
-## Open: fixture audio (Q1)
+## Fixture audio — settled (D6)
 
-Offline decode tests need MP3 bytes from somewhere. The ecosystem rule against committing
-audio is about licensing, and the cleanest way to honor it is to sidestep the question
-entirely: **generate MP3 frames programmatically at test time** — a tone or silence — so
-nothing copyrighted is ever committed and the fixture is reproducible from source.
+Offline decode tests need MP3 bytes. Committing audio is fine *in this repo* (surfer's rule
+is that project's, and is about licensing rather than file type), and generating our own
+sidesteps licensing entirely.
 
-Resolved in `fake-icecast-server`.
+**Commit both the generator script and its rendered `.mp3`.** The script keeps the fixture
+reproducible and auditable; the committed output means no machine — including CI — needs an
+encoder to run tests.
+
+Two deliberate choices:
+
+- **A real signal, not silence.** Silence decodes fine while hiding exactly the corruption
+  that matters — the lookahead bug produced *audio*, just less of it. A few seconds of
+  oscillators is also something a human debugging by ear can actually judge.
+- **ffmpeg/libmp3lame** does the encoding, as a dev-time tool. It never ships and isn't
+  linked, so its licensing doesn't touch the permissive-only rule; the rendered output is our
+  own content and freely redistributable.
 
 ## What stays network-dependent
 

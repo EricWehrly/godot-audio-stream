@@ -2,55 +2,59 @@
 id: platform-matrix
 type: feature
 epic: phase-ship
+design: [docs/design/decisions.md]
 status: planned
 ---
 
-# Platform Matrix & CI Builds
+# Build Command & Platform Reach
 
-**Goal:** Builds for the platforms surfer targets, produced by CI rather than by hand.
+**Goal:** A clean, documented, one-command build producing a vendorable artifact. Additional
+platforms and CI automation only when something actually needs them.
 
-**Why:** Only a hand-built Windows x86_64 debug binary exists. Two problems: the artifact
-isn't reproducible by anyone else, and hand-building is exactly how a stale binary ends up
-shipped. It also unblocks `surfer-integration`'s recommended consumption route (vendor a
-released artifact, keeping SCons and MSVC out of surfer's pipeline).
+**Why (D7):** *Do no more work than surfer needs.* Surfer needs one thing from this repo — a
+built artifact it can vendor, without dragging SCons or MSVC into its own pipeline. That's a
+build command and a README section, not a release pipeline.
 
-Scoped to `phase-ship` rather than earlier per **D1** — surfer-first means platform breadth
-follows evidence of usefulness rather than preceding it.
+Deliberately de-scoped from an earlier "build all platforms in CI on tag" plan. That's the
+conventional GDExtension endpoint (see D7) and remains the destination, but it's automation
+we haven't earned yet.
 
-## Scope
+## Scope (now)
 
-- **Targets:** `template_debug` and `template_release` for Windows x86_64, Linux x86_64,
-  macOS (universal). Web is impossible (**D3**) and must not appear in the matrix.
-- **CI** (GitHub Actions, since the repo is on GitHub) building all targets on tag, publishing
-  a release archive laid out for direct vendoring: `addons/<name>/` with the `.gdextension`
-  and `bin/`.
-- Extend the `.gdextension` `[libraries]` block to list every built target.
-- **Verify the toolchain workaround is CI-safe.** `SConstruct`'s `find_vcvars()` exists for a
-  broken local VS install; on a clean CI runner it should find the normal instance, but that
-  must be confirmed rather than assumed — and the non-Windows path (`os.name != "nt"` →
-  `None`) must be exercised, which it never has been.
-- Run `test_load.gd` on each platform in CI as a smoke test.
+- **One command produces the artifact**, laid out ready to vendor:
+  `addons/godot_audio_stream/` containing the `.gdextension` and `bin/`.
+- A short build section in the README: prerequisites, the command, where the output lands.
+  It should be honest about the local Visual Studio workaround `SConstruct` carries.
+- Build `template_release` as well as `template_debug` — currently only debug has ever been
+  built, and the release path is therefore unverified.
+- Verify a **clean clone builds** with only the documented steps. The most likely failure is
+  an undocumented assumption about this machine.
 
-## Non-goals
+## Scope (deferred until triggered)
 
-- Godot asset library publication (**D1** — no third-party promises yet).
-- 32-bit, ARM Windows, or mobile until something needs them.
-- Web (**D3**).
+| Deferred | Trigger |
+|---|---|
+| Linux / macOS builds | Surfer targets that platform, or someone asks |
+| GitHub Actions CI | Hand-building becomes a real burden or a stale binary ships |
+| Tagged releases with archives | There's an external consumer to release *to* |
+| Godot asset library entry | D1 changes — no third-party promises today |
+
+Web is impossible (**D3**) and must never appear in the matrix.
+
+## Notes for when platforms do get added
+
+- `SConstruct`'s `find_vcvars()` exists for a broken local VS install and returns `None` on
+  non-Windows — a path that has **never been exercised**. Confirm it before assuming the
+  Linux build is a no-op change.
+- macOS is unverifiable locally, so it would be CI-only with no local debugging. Worth
+  questioning whether it's worth carrying at all under D1.
 
 ## Acceptance
 
-- A tagged release produces downloadable archives for all three platforms.
-- Each loads and passes `test_load.gd` on its own platform.
-- The non-Windows build path works without the MSVC workaround interfering.
-- A fresh clone builds with documented commands and no undocumented local setup.
-
-## Open
-
-macOS is unavailable locally, so it will be CI-verified only — no local debugging if it
-breaks. Linux is verifiable through WSL if needed. Worth deciding whether macOS is worth
-carrying at all under D1, given surfer targets Windows today; it may be honest to ship
-Windows + Linux and add macOS when someone actually needs it.
+- A fresh clone builds with the documented command, no undocumented setup.
+- Both debug and release targets build and load (`test_load.gd` passes).
+- The output directory is directly vendorable — copy it into a Godot project and it works.
 
 ## Links
 
-up → `phase-ship` · unblocks → `surfer-integration` (release-artifact consumption route)
+up → `phase-ship` · decisions → D7 (scope), D3 (no web) · unblocks → `surfer-integration`

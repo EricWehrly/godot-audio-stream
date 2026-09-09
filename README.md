@@ -152,7 +152,8 @@ Two harnesses, both headless:
 <godot> --headless --path demo -s test_load.gd
 
 # Soak: live station, real-time drain, starvation counter. Default 45s.
-<godot> --headless --path demo -s test_stream.gd ++ --seconds=330
+# --url is required: no station ships with this repo (D8).
+<godot> --headless --path demo -s test_stream.gd ++ --url=http://host/mount --seconds=330
 ```
 
 `test_stream.gd` drains the FIFO at exactly the stream's own sample rate to simulate a
@@ -175,7 +176,12 @@ Criteria 5 and 6 are deliberately not self-certified. A starvation counter readi
 the buffer stayed fed; it does not say the audio sounds right, and that judgement isn't
 mine to make.
 
-### Measured (330s, SomaFM Groove Salad, 128 kbps)
+### Measured (330s against a live 128 kbps Icecast stream)
+
+> No station URL ships with this repo (**D8**) — `stream_url` is empty by default and
+> `test_stream.gd` requires `--url=`. Supply your own, and check that station's terms first:
+> some explicitly forbid third-party applications regardless of commercial intent.
+
 
 ```
 ran              330.0s              44100 Hz, 2 ch

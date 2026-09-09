@@ -44,17 +44,42 @@ natively and handle buffering and reconnection themselves.
 - Handle the browser autoplay policy: audio can't start without a user gesture. Godot's docs
   call this out explicitly, and it means the consuming game needs a "click to start" moment —
   a real UX constraint, not just a technical one.
-- Document the honest limitations loudly: **audio bypasses Godot's bus graph entirely**, so
-  no effects, no per-bus volume, no spectrum analysis. Surfer's audio-reactive visuals would
-  not work from a web radio stream.
+- Document the honest limitation: **audio bypasses Godot's bus graph entirely**, so no Godot
+  `AudioEffect`s and no per-bus volume through the usual path. (Web supports no `AudioEffect`s
+  or reverb regardless, so less is lost than it first appears.)
 
-## Notable consequence
+## Spectrum analysis is recoverable — correcting an earlier claim
 
-That last point may matter more than the feature. Surfer drives visuals from audio spectrum
-analysis; a browser `<audio>` element is opaque to that. So on web, radio would play but the
-game's audio-reactive systems would sit idle. Web supports no `AudioEffect`s or reverb anyway,
-so some of this is lost regardless — but it should be a conscious tradeoff, not a surprise
-discovered after building it.
+An earlier draft of this doc asserted that a browser `<audio>` element is opaque to spectrum
+analysis and that surfer's audio-reactive visuals would therefore sit idle on web. **That was
+wrong.** The Web Audio API can analyze a media element directly:
+
+```js
+const src = audioCtx.createMediaElementSource(audioEl);
+const analyser = audioCtx.createAnalyser();
+src.connect(analyser); analyser.connect(audioCtx.destination);
+// analyser.getByteFrequencyData(...) -> back to GDScript via JavaScriptBridge
+```
+
+There is also **prior art in this project**: the retired Three.js web implementation did
+browser-side audio analysis. So this is a solved problem here, not a research question.
+
+**The real caveat is CORS, not capability.** `createMediaElementSource` on a *cross-origin*
+stream produces silence unless the server sends permissive CORS headers and the element sets
+`crossOrigin="anonymous"` — the node outputs zeros as a security measure, which will look
+like "the analyser is broken" rather than a permissions problem.
+
+Encouragingly, our own probe of SomaFM showed it already sends them:
+
+```
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Headers: *
+```
+
+So analysis works for that station. It will **not** work universally, and stations can't be
+assumed to send CORS headers. Treat per-station analyser availability as a runtime
+capability to detect, not a guarantee — and note this makes it a *different* failure mode
+from the native path, where we always own the PCM.
 
 ## Non-goals
 

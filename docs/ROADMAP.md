@@ -87,8 +87,8 @@ Today only a direct `http://` MP3 endpoint works. That is a minority of what sta
 
 | Feature | What it buys |
 |---------|--------------|
-| [`surfer-integration`](features/surfer-integration.md) | How it's consumed, and the in-game perf verdict `phase-measure` can't give. |
-| [`platform-matrix`](features/platform-matrix.md) | Linux/macOS builds; CI so binaries aren't hand-built. |
+| [`surfer-integration`](features/surfer-integration.md) | Surfer vendors the built artifact (D7), plus the in-game perf verdict `phase-measure` can't give. |
+| [`platform-matrix`](features/platform-matrix.md) | One documented build command producing a vendorable artifact. Extra platforms and CI deliberately deferred until triggered (D7). |
 | [`stream-gain-normalization`](features/stream-gain-normalization.md) | Radio loudness vs. local files — a real mixing problem for a music game. |
 
 ### `phase-reach` — later

@@ -86,21 +86,130 @@ Opus is BSD-licensed.
 
 ---
 
-## Open questions
+## D6 — Commit a generated MP3 fixture, and the generator that made it
 
-**Q1 — Test fixture audio.** Offline decoder tests need MP3 bytes. Surfer's hard rule
-("never commit audio files") is about *that* repo and about licensing, but the spirit
-applies. Leading option: generate synthetic MP3 frames programmatically at test time (a
-tone or silence), so nothing copyrighted is ever committed and the fixture is reproducible.
-Alternative: commit a few hundred bytes of self-generated CC0 tone. Resolve in
-`fake-icecast-server`.
+**Decided 2026-09-08, resolving Q1.** Committing audio is fine *in this repo* — surfer's
+"never commit audio files" rule is that project's, and is about licensing rather than file
+type. We sidestep licensing entirely by generating our own:
 
-**Q2 — How does surfer consume this?** The addon taxonomy in surfer's CLAUDE.md offers a
-submodule-in-`lib/`-plus-symlink pattern (for repos under active iteration) or vendoring it
-like a third-party addon. This has a binary artifact, which neither pattern handles cleanly.
-Resolve in `surfer-integration`.
+- A short **oscillator piece** (a few seconds; something not-entirely-unpleasant rather than a
+  bare sine, so a human debugging by ear can actually tell it's playing correctly and hear
+  glitches) rendered to MP3 with **ffmpeg/libmp3lame**, confirmed available locally.
+- **Both** artifacts are committed: the generator script *and* its `.mp3` output. The script
+  keeps it reproducible and auditable; the committed output means tests need no encoder at
+  runtime and CI needs no ffmpeg.
+- Content is ours, so it's freely redistributable and no third-party audio ever enters the
+  repo. Worth marking CC0 explicitly in a note beside it.
 
-**Q3 — Whose responsibility is stream licensing?** Whether a shipped game may play a given
-third-party station is a ToS question, wholly separate from whether the bytes decode. It
-likely argues for user-supplied URLs over anything hardcoded. Not an engineering decision,
-but it should be made before shipping.
+**Why not generate at test time:** it makes ffmpeg a test dependency on every machine and in
+CI, for a file that never changes. Committing a few hundred KB is cheaper than that.
+
+**Deliberately a real signal, not silence.** Silence would decode fine while hiding exactly
+the corruption we care about — the lookahead bug produced *audio*, just less of it.
+
+---
+
+## D7 — Documented one-command build; surfer references the repo
+
+**Decided 2026-09-08, resolving Q2.** Scope is deliberately minimal: **do no more work than
+surfer needs.**
+
+- This repo supports a documented one-command build producing the artifact.
+- Surfer references the repo by link and vendors the built artifact.
+- **No CI, no release automation, no platform matrix until something actually needs them.**
+
+**How GDExtensions normally lifecycle** (the question behind Q2): the conventional pattern is
+exactly the endpoint we sketched — repo with a godot-cpp submodule and a build script → CI
+builds each platform on tag → a GitHub release ships an `addons/<name>/` folder containing the
+`.gdextension` and `bin/` → consumers unzip it into their project. Godot asset-library entries
+are essentially that zip. We already have the build half; only the release half is missing.
+
+So D7 isn't a different architecture from the normal lifecycle — it's the same shape with the
+automation deferred until it's earned. The important property either way: **surfer's pipeline
+never needs SCons or MSVC**, since it consumes a built artifact.
+
+**Consequence:** `platform-matrix` is demoted from "build all platforms in CI" to "make the
+build command clean and documented", with CI as a later trigger-based addition.
+
+---
+
+## D8 — No station URL ships with this repo; directories over curated lists
+
+**Decided 2026-09-08, resolving Q3.** Research findings and the resulting policy.
+
+### The finding that forced this
+
+**SomaFM — the station our POC was hardcoded against — explicitly forbids exactly what we
+were doing.** Verified at the primary source
+([somafm.com/contact/tos.html](https://somafm.com/contact/tos.html)):
+
+> *"We can't grant permission for third-party SomaFM clients or applications, even
+> noncommercial ones."*
+
+They prohibit *"Embedding the Content in any website, application, or platform"* and
+*"Re-streaming, retransmitting, or broadcasting the Content"* without written permission,
+because their own music licensing doesn't permit them to authorize third-party use of their
+streams, branding, or metadata. There are *"a small number of longstanding exceptions … that
+predate this policy, but we're not adding new ones."* **No exception for development,
+testing, or non-commercial use.**
+
+**Do not write to them asking for permission.** Their site notes that AI tools keep
+generating permission requests at their expense. The answer is already published; respect it.
+
+### The decision
+
+- **No station URL ships in this repo, ever.** The demo's `stream_url` defaults to empty and
+  `test_stream.gd` requires `--url=`. Removed 2026-09-08.
+- Once `fake-icecast-server` exists it becomes the default test source, and the offline suite
+  needs no third-party station at all.
+- **For surfer: a directory browser plus a user-URL field. No curated shipped list.**
+  Shipping station names/URLs is precisely what draws objections, and it inherits both
+  maintenance and per-station ToS review.
+
+### Radio Browser is the recommended directory
+
+[api.radio-browser.info](https://api.radio-browser.info/) — ~58,000 stations, free JSON REST
+API, **no key**, and it explicitly permits use *"in free and non free software"*. It also
+solves the dead-station problem that plagues baked-in lists. Requirements from
+[their docs](https://docs.radio-browser.info/): send a descriptive `User-Agent`
+(`appname/version`), **resolve the server list dynamically** rather than hardcoding a host,
+and POST the click endpoint so popularity stats work.
+
+**Unverified, treat with caution:** the data license (probably public domain, but only
+reachable via search snippets — the site is a JS SPA that resisted fetching) and the
+commonly-cited 2–3 req/s rate limit (from third-party doc mirrors, *not* official docs, which
+state no number). There is **no uptime guarantee**, so radio must degrade gracefully to local
+files.
+
+Alternatives are weak: Xiph's `dir.xiph.org` publishes a heavy XML dump with no published
+terms (absence of terms is not permission), and Shoutcast's API needs a per-partner key that
+forum history suggests is no longer issued.
+
+### Precedent
+
+**Euro Truck Simulator 2 / American Truck Simulator** is the direct analogue: a curated list
+shipped in-game, refreshable via "Update From Internet" from an SCS-hosted file, plus
+user-editable entries. Notably, SCS's **1.60 update (May 2026)** added *Game Radio* — licensed,
+curated in-house stations built partly on streamer-safe libraries — *alongside* the existing
+online-radio system. Read that as a studio hedging toward owned content.
+
+Given surfer's aesthetic, a small set of **owned or CC0 vaporwave streams** may beat internet
+radio outright, and carries none of this risk.
+
+### Where liability actually sits
+
+Music licensing is consistently the **station operator's** responsibility — they hold the
+PRO and sound-recording licenses. A player that opens a public URL and decodes locally is
+plausibly distinguishable from proxying or rebroadcasting.
+
+**But this genuinely needs a lawyer, not more searching.** Every source found addresses
+*broadcasters*, not *player apps*; none squarely answers whether a commercial game bears
+liability for pointing at someone else's stream. The likelier exposure is **contract** (a
+station's ToS, as SomaFM demonstrates) than copyright. "The user chose the URL" is modestly
+safer because we distribute no station identifiers — but it is not a shield.
+
+### Not this library's job
+
+Directory browsing stays a documented non-goal here: it's HTTP + JSON and pure GDScript, with
+no C++ involved. It belongs in the consuming game or the shared toolkit. This library plays a
+URL; something else decides which.
