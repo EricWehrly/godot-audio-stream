@@ -6,6 +6,17 @@ in Godot 4, which the engine cannot do on its own.
 Standalone POC spun out of [surfer](../../../Dropbox/Projects/surfer) — see
 `docs/features/music-library-discovery.md` there for the consuming context.
 
+## Documentation
+
+| Doc | What's in it |
+|-----|--------------|
+| [**Roadmap**](docs/ROADMAP.md) | Phases, sequencing rationale, non-goals |
+| [Work items & index](docs/features/README.md) | Traceability scheme, live feature index |
+| [Architecture](docs/design/architecture.md) | The boundary, threading, and the load-bearing invariants |
+| [Performance](docs/design/performance.md) | What's measurable here vs. what needs the consuming game |
+| [Testing strategy](docs/design/testing-strategy.md) | Three tiers; why a local stream server is the keystone |
+| [Decisions](docs/design/decisions.md) | D1–D5 + open questions — **read before re-litigating scope** |
+
 ## The problem
 
 Godot 4 has no way to progressively decode compressed audio as bytes arrive:
