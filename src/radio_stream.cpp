@@ -64,11 +64,14 @@ void RadioStream::_bind_methods() {
 
 bool RadioStream::parse_url(const String &p_url, Url &r_out) {
 	String rest = p_url;
+	int default_port = 80;
 	if (rest.begins_with("http://")) {
 		rest = rest.substr(7);
+		r_out.is_tls = false;
 	} else if (rest.begins_with("https://")) {
-		// TLS would need StreamPeerTLS wrapping; out of scope for the POC.
-		return false;
+		rest = rest.substr(8);
+		r_out.is_tls = true;
+		default_port = 443;
 	}
 
 	int slash = rest.find("/");
@@ -78,7 +81,7 @@ bool RadioStream::parse_url(const String &p_url, Url &r_out) {
 	int colon = authority.find(":");
 	if (colon == -1) {
 		r_out.host = authority;
-		r_out.port = 80;
+		r_out.port = default_port;
 	} else {
 		r_out.host = authority.substr(0, colon);
 		r_out.port = authority.substr(colon + 1).to_int();
@@ -91,7 +94,7 @@ bool RadioStream::open(const String &p_url) {
 
 	Url url;
 	if (!parse_url(p_url, url)) {
-		fail("Could not parse URL (http:// only, https is not supported): " + p_url);
+		fail("Could not parse URL: " + p_url);
 		return false;
 	}
 
@@ -134,18 +137,32 @@ void RadioStream::fail(const String &p_message) {
 	status.store(STATUS_ERROR);
 }
 
-void RadioStream::worker_main(Url p_url) {
-	Ref<StreamPeerTCP> peer;
-	peer.instantiate();
+bool RadioStream::poll_connection(Ref<StreamPeerTCP> p_tcp, Ref<StreamPeerTLS> p_tls) {
+	p_tcp->poll();
+	if (p_tcp->get_status() != StreamPeerTCP::STATUS_CONNECTED) {
+		return false;
+	}
+	if (p_tls.is_valid()) {
+		p_tls->poll();
+		if (p_tls->get_status() != StreamPeerTLS::STATUS_CONNECTED) {
+			return false;
+		}
+	}
+	return true;
+}
 
-	if (peer->connect_to_host(p_url.host, p_url.port) != OK) {
+void RadioStream::worker_main(Url p_url) {
+	Ref<StreamPeerTCP> tcp_peer;
+	tcp_peer.instantiate();
+
+	if (tcp_peer->connect_to_host(p_url.host, p_url.port) != OK) {
 		fail("connect_to_host failed for " + p_url.host);
 		return;
 	}
 
 	while (running.load()) {
-		peer->poll();
-		StreamPeerTCP::Status st = peer->get_status();
+		tcp_peer->poll();
+		StreamPeerTCP::Status st = tcp_peer->get_status();
 		if (st == StreamPeerTCP::STATUS_CONNECTED) {
 			break;
 		}
@@ -159,8 +176,53 @@ void RadioStream::worker_main(Url p_url) {
 		return;
 	}
 
+	Ref<StreamPeerTLS> tls_peer;
+	Ref<StreamPeer> data_peer = tcp_peer;
+
+	if (p_url.is_tls) {
+		tls_peer.instantiate();
+		if (tls_peer->connect_to_stream(tcp_peer, p_url.host) != OK) {
+			fail("Could not start TLS handshake");
+			return;
+		}
+
+		const int64_t handshake_deadline_ms = 10000;
+		int64_t waited = 0;
+		while (running.load()) {
+			tcp_peer->poll();
+			tls_peer->poll();
+			StreamPeerTLS::Status tst = tls_peer->get_status();
+			if (tst == StreamPeerTLS::STATUS_CONNECTED) {
+				break;
+			}
+			if (tst == StreamPeerTLS::STATUS_ERROR) {
+				fail("TLS handshake failed");
+				return;
+			}
+			if (tst == StreamPeerTLS::STATUS_ERROR_HOSTNAME_MISMATCH) {
+				// Not retryable -- the certificate genuinely doesn't match
+				// the host we asked for. reconnect-resilience (once it
+				// exists) should treat this class of error as terminal
+				// rather than retrying, same call tls-streams.md makes for a
+				// bad certificate in general.
+				fail("TLS certificate hostname mismatch for " + p_url.host);
+				return;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			waited += 10;
+			if (waited > handshake_deadline_ms) {
+				fail("TLS handshake timed out");
+				return;
+			}
+		}
+		if (!running.load()) {
+			return;
+		}
+		data_peer = tls_peer;
+	}
+
 	std::vector<uint8_t> input;
-	if (!http_handshake(peer, p_url, input)) {
+	if (!http_handshake(data_peer, tcp_peer, tls_peer, p_url, input)) {
 		return;
 	}
 
@@ -168,19 +230,18 @@ void RadioStream::worker_main(Url p_url) {
 	decode_available(input);
 
 	while (running.load()) {
-		peer->poll();
-		if (peer->get_status() != StreamPeerTCP::STATUS_CONNECTED) {
+		if (!poll_connection(tcp_peer, tls_peer)) {
 			fail("Stream disconnected");
 			return;
 		}
 
-		int avail = peer->get_available_bytes();
+		int avail = data_peer->get_available_bytes();
 		if (avail <= 0) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(5));
 			continue;
 		}
 
-		Array result = peer->get_partial_data(std::min(avail, SOCKET_READ_CHUNK));
+		Array result = data_peer->get_partial_data(std::min(avail, SOCKET_READ_CHUNK));
 		int64_t read_error = result[0];
 		if (read_error != (int64_t)OK) {
 			fail("Socket read error");
@@ -196,8 +257,8 @@ void RadioStream::worker_main(Url p_url) {
 	}
 }
 
-bool RadioStream::http_handshake(Ref<StreamPeerTCP> p_peer, const Url &p_url,
-		std::vector<uint8_t> &r_leftover) {
+bool RadioStream::http_handshake(Ref<StreamPeer> p_data_peer, Ref<StreamPeerTCP> p_tcp,
+		Ref<StreamPeerTLS> p_tls, const Url &p_url, std::vector<uint8_t> &r_leftover) {
 	// Deliberately no "Icy-MetaData: 1" -- requesting metadata makes Icecast
 	// interleave title blocks into the audio every icy-metaint bytes, which
 	// corrupts MP3 framing unless de-interleaved. Titles are a follow-up.
@@ -208,7 +269,7 @@ bool RadioStream::http_handshake(Ref<StreamPeerTCP> p_peer, const Url &p_url,
 			"Connection: close\r\n\r\n";
 
 	PackedByteArray request_bytes = request.to_utf8_buffer();
-	if (p_peer->put_data(request_bytes) != OK) {
+	if (p_data_peer->put_data(request_bytes) != OK) {
 		fail("Failed to send HTTP request");
 		return false;
 	}
@@ -218,8 +279,11 @@ bool RadioStream::http_handshake(Ref<StreamPeerTCP> p_peer, const Url &p_url,
 	int64_t waited = 0;
 
 	while (running.load()) {
-		p_peer->poll();
-		int avail = p_peer->get_available_bytes();
+		if (!poll_connection(p_tcp, p_tls)) {
+			fail("Connection dropped during handshake");
+			return false;
+		}
+		int avail = p_data_peer->get_available_bytes();
 		if (avail <= 0) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 			waited += 10;
@@ -230,7 +294,7 @@ bool RadioStream::http_handshake(Ref<StreamPeerTCP> p_peer, const Url &p_url,
 			continue;
 		}
 
-		Array result = p_peer->get_partial_data(std::min(avail, SOCKET_READ_CHUNK));
+		Array result = p_data_peer->get_partial_data(std::min(avail, SOCKET_READ_CHUNK));
 		int64_t read_error = result[0];
 		if (read_error != (int64_t)OK) {
 			fail("Socket read error during handshake");

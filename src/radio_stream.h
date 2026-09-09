@@ -10,7 +10,9 @@
 
 #include <godot_cpp/classes/ref.hpp>
 #include <godot_cpp/classes/ref_counted.hpp>
+#include <godot_cpp/classes/stream_peer.hpp>
 #include <godot_cpp/classes/stream_peer_tcp.hpp>
+#include <godot_cpp/classes/stream_peer_tls.hpp>
 #include <godot_cpp/core/binder_common.hpp>
 #include <godot_cpp/variant/packed_vector2_array.hpp>
 #include <godot_cpp/variant/string.hpp>
@@ -73,13 +75,20 @@ private:
 		godot::String host;
 		godot::String path;
 		int port = 80;
+		bool is_tls = false;
 	};
 
 	static bool parse_url(const godot::String &p_url, Url &r_out);
 
 	void worker_main(Url p_url);
-	bool http_handshake(godot::Ref<godot::StreamPeerTCP> p_peer, const Url &p_url,
-			std::vector<uint8_t> &r_leftover);
+	// Polls whichever layer(s) are active and reports whether the connection
+	// is still up. TLS wraps TCP, so both need polling every tick: TCP pumps
+	// the raw socket, TLS pumps its own handshake/record layer on top of it.
+	// p_tls may be null (plain http), in which case only the TCP status
+	// matters.
+	static bool poll_connection(godot::Ref<godot::StreamPeerTCP> p_tcp, godot::Ref<godot::StreamPeerTLS> p_tls);
+	bool http_handshake(godot::Ref<godot::StreamPeer> p_data_peer, godot::Ref<godot::StreamPeerTCP> p_tcp,
+			godot::Ref<godot::StreamPeerTLS> p_tls, const Url &p_url, std::vector<uint8_t> &r_leftover);
 	void decode_available(std::vector<uint8_t> &r_input);
 	void fail(const godot::String &p_message);
 

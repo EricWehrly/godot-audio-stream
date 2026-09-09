@@ -52,7 +52,7 @@ status: planned | in-progress | done
 | `phase-measure` | epic | — | planned |
 | [`perf-harness`](perf-harness.md) | feature | `phase-measure` | planned — see `design/performance.md` for the here-vs-surfer split |
 | `phase-stations` | epic | — | planned |
-| [`tls-streams`](tls-streams.md) | feature | `phase-stations` | planned |
+| [`tls-streams`](tls-streams.md) | feature | `phase-stations` | ✅ done 2026-09-08 — verified against the real station that motivated it (25s + 90s soaks clean, byte accounting closes, rode out a real network dip with 0 starvations); plain http path confirmed unchanged |
 | [`url-resolution`](url-resolution.md) | feature | `phase-stations` | planned |
 | [`icy-metadata`](icy-metadata.md) | feature | `phase-stations` | planned |
 | `phase-ship` | epic | — | planned |
