@@ -47,7 +47,7 @@ status: planned | in-progress | done
 | `phase-poc` | epic | — | ✅ done — `4267806`, verified on 4.6 + 4.7, 330s soak clean |
 | `phase-trust` | epic | — | planned |
 | [`fake-icecast-server`](fake-icecast-server.md) | feature | `phase-trust` | in-progress — **keystone**, server + fixture built 2026-09-08, spot-checked against real `RadioStream` (byte accounting closes, `--drop-after` reaches `STATUS_ERROR`). Not yet wired into `unit-test-suite` |
-| [`unit-test-suite`](unit-test-suite.md) | feature | `phase-trust` | planned |
+| [`unit-test-suite`](unit-test-suite.md) | feature | `phase-trust` | in-progress — decoder-regression half built 2026-09-08, offline (`demo/test_offline.gd`); regression guard proven via an actual revert-rebuild-rerun (skipped 0→112,814B on the reintroduced bug). Pure-logic half (needs C++ test seams) not started |
 | [`reconnect-resilience`](reconnect-resilience.md) | feature | `phase-trust` | planned |
 | `phase-measure` | epic | — | planned |
 | [`perf-harness`](perf-harness.md) | feature | `phase-measure` | planned — see `design/performance.md` for the here-vs-surfer split |

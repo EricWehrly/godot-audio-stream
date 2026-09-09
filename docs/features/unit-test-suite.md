@@ -3,7 +3,7 @@ id: unit-test-suite
 type: feature
 epic: phase-trust
 design: [docs/design/testing-strategy.md]
-status: planned
+status: in-progress
 ---
 
 # Unit Test Suite
@@ -49,12 +49,41 @@ test-only build flag. Prefer the former unless the API surface becomes embarrass
 - Testing the audio graph. That's the demo's job and ultimately a human's.
 - Chasing coverage numbers. The list above is chosen by risk, not by line count.
 
+## Built 2026-09-08: the decoder-regression half
+
+`demo/test_offline.gd` — spawns `fake_icecast/server.py` itself via `OS.create_process`, no
+network required. Three cases, `_process()`-driven (see the file's own doc comment: an
+`await`-chain from `_init()` was tried first and silently didn't work — it printed all three
+case headers instantly and reported a false "0 passed, 0 failed, RESULT: PASS" with none of
+the coroutines ever actually completing. Every other script in this repo already uses
+explicit `_process()` polling for exactly this reason; this just follows suit rather than
+debugging why `await` misbehaves here).
+
+- **`byte_accounting_and_lookahead_guard`** — the highest-value case. Runs long enough to
+  loop the fixture (~7s), then asserts `received == audio + skipped + backlog` and
+  `skipped_bytes < 2000` (healthy: only the fixture's one-time leading ID3 tag, ~836B).
+- **`http_error_fails_cleanly`** — a 404 reaches `STATUS_ERROR` promptly rather than hanging.
+- **`drop_reaches_status_error`** — a mid-stream drop reaches `STATUS_ERROR` (today's
+  documented terminal contract; `reconnect-resilience` will change this later).
+
+**The regression guard was proven, not just written**: temporarily reverted
+`DECODE_LOOKAHEAD` to 0, rebuilt, reran. Skipped bytes jumped from 0 to **112,814 of 250,700
+received (45%)** — matching the originally measured 43% almost exactly — and the suite failed
+loudly with a diagnostic naming the cause. Reverted and rebuilt; clean 3/3 pass restored.
+Confirmed clean process teardown (no leftover `python.exe` after a run, pass or fail).
+
+**Not yet done:** the pure-logic half (URL parsing, header parsing, FIFO arithmetic) — still
+needs the C++ test seams this doc's "Test seams needed" section describes. Also not yet done:
+a `test.sh`-equivalent wrapper script (currently run by invoking Godot directly, per the
+file's own header comment).
+
 ## Acceptance
 
-- `test.sh`-equivalent runs green with **no network available**.
-- Reintroducing the lookahead bug (setting `DECODE_LOOKAHEAD` to 0) makes a test fail loudly.
-- Header-parsing tests cover the split-across-reads case, which a live fast connection rarely
-  produces naturally.
+- ✅ Offline suite runs green with **no network available** — proven, not just designed.
+- ✅ Reintroducing the lookahead bug makes a test fail loudly — proven via an actual
+  revert-rebuild-rerun cycle, not just asserted.
+- ⚑ Header-parsing tests covering the split-across-reads case — not started (needs the C++
+  test seams).
 
 ## Links
 
