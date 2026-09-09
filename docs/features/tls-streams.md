@@ -2,7 +2,7 @@
 id: tls-streams
 type: feature
 epic: phase-stations
-status: done
+status: in-progress
 ---
 
 # TLS (`https://`) Streams
@@ -73,6 +73,39 @@ eu/listen/synthwaveradio.eu/radio.mp3`) that previously failed with "https is no
 - Plain `http://` behaviour confirmed unchanged: the offline suite
   (`fake-icecast-server`-backed) still passes 3/3 untouched, and the extension still loads in
   both Godot 4.6 and 4.7.
+
+## Open issue found integrating into surfer (2026-09-08) — NOT resolved
+
+TLS works reliably in **this repo's own demo** (25s + 90s soaks above) but **fails
+deterministically, 3/3, inside surfer's actual project**:
+
+```
+ERROR: SSL module failed to initialize!
+   at: init_client (modules/mbedtls/tls_context_mbedtls.cpp:208)
+   at: connect_to_stream (modules/mbedtls/stream_peer_mbedtls.cpp:104)
+```
+
+Isolated, not guessed at:
+- Retried 3x in surfer, deterministic every time — not contention (the demo project, tested
+  moments later on the identical machine state, succeeded immediately).
+- `HTTPRequest`-based https (Radio Browser's own search, which also goes through
+  `StreamPeerTLS` internally) **works fine** in surfer, at the same time. So TLS itself isn't
+  broken project-wide.
+- No `network/tls/*` project setting exists in either project — checked, not assumed.
+
+**The one confirmed structural difference**: `HTTPRequest`'s TLS init happens on Godot's main
+thread. `RadioStream`'s happens on its own worker `std::thread` — and that's the case that
+fails, only inside surfer's larger project (more autoloads, more concurrent engine activity),
+never in the minimal demo. Leading hypothesis, **unconfirmed**: a thread-safety issue in
+Godot's own mbedtls wrapper that a quiet demo project never has enough concurrent activity to
+trigger. Not chased further this pass — would need reading Godot engine source
+(`tls_context_mbedtls.cpp`) or a minimal repro project graduated in complexity between "the
+demo" and "all of surfer" to actually localize.
+
+**Consequence:** the surfer-side UI change un-gating https results was reverted before
+committing — shipping "https now works" into the one place that's actually supposed to
+consume it, while it demonstrably doesn't work there, would be worse than the gate it was
+replacing. `station-tuner`'s https gate stays in place until this is root-caused.
 
 ## Not done this pass
 
